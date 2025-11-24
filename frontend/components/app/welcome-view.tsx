@@ -30,6 +30,10 @@ export const WelcomeView = ({
 }: React.ComponentProps<'div'> & WelcomeViewProps) => {
   return (
     <div ref={ref}>
+      <p className="text-center text-4xl sm:text-4xl font-extrabold text-blue-400 my-8">
+        Health & Wellness Voice Companion
+      </p>
+
       <section className="bg-background flex flex-col items-center justify-center text-center">
         <WelcomeImage />
 
