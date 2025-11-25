@@ -1,0 +1,32 @@
+[
+    {
+        "id": "osi_model",
+        "title": "OSI Model",
+        "summary": "The OSI (Open Systems Interconnection) model is a conceptual framework that divides network communication into seven layers, from physical transmission to application-level interactions. It helps standardize communication between different devices and systems.",
+        "sample_question": "What are the seven layers of the OSI model?"
+    },
+    {
+        "id": "ip_address",
+        "title": "IP Address",
+        "summary": "An IP address is a unique numerical label assigned to each device connected to a network that uses the Internet Protocol. It identifies the host and provides its location in the network. There are two versions: IPv4 and IPv6.",
+        "sample_question": "What is the difference between IPv4 and IPv6?"
+    },
+    {
+        "id": "router",
+        "title": "Router",
+        "summary": "A router is a networking device that forwards data packets between computer networks. It determines the best path to send the data across interconnected networks based on routing tables and algorithms.",
+        "sample_question": "How does a router decide which path to send data through?"
+    },
+    {
+        "id": "dns",
+        "title": "DNS",
+        "summary": "The Domain Name System (DNS) is a hierarchical naming system that translates human-friendly domain names into IP addresses, making it easier for users to access websites without remembering numerical addresses.",
+        "sample_question": "Why do we need DNS instead of directly using IP addresses?"
+    },
+    {
+        "id": "tcpip",
+        "title": "TCP Model",
+        "summary": "The TCP/IP model is a suite of communication protocols used for the Internet and similar networks. It has four layers: Link, Internet, Transport, and Application. It outlines how data should be packaged, transmitted, and received.",
+        "sample_question": "What are the four layers of the TCP/IP model?"
+    }
+]

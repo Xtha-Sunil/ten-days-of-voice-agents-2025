@@ -1,10 +1,9 @@
 import logging
 import json
 import os
-from datetime import datetime
-from typing import Annotated, Literal
-from dataclasses import dataclass, field
-
+import asyncio
+from typing import Annotated, Literal, Optional
+from dataclasses import dataclass
 from dotenv import load_dotenv
 from pydantic import Field
 from livekit.agents import (
@@ -15,311 +14,220 @@ from livekit.agents import (
     RoomInputOptions,
     WorkerOptions,
     cli,
-    metrics,
-    MetricsCollectedEvent,
-    RunContext,
     function_tool,
+    RunContext,
 )
-
 from livekit.plugins import murf, silero, google, deepgram, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("agent")
 load_dotenv(".env.local")
 
-@dataclass
-class OrderState:
-    """☕ Coffee shop order state with validation"""
-    drinkType: str | None = None
-    size: str | None = None
-    milk: str | None = None
-    extras: list[str] = field(default_factory=list)
-    name: str | None = None
-    
-    def is_complete(self) -> bool:
-        """✅ Check if all required fields are filled"""
-        return all([
-            self.drinkType is not None,
-            self.size is not None,
-            self.milk is not None,
-            self.extras is not None,
-            self.name is not None
-        ])
-    
-    def to_dict(self) -> dict:
-        """📦 Convert to dictionary for JSON serialization"""
-        return {
-            "drinkType": self.drinkType,
-            "size": self.size,
-            "milk": self.milk,
-            "extras": self.extras,
-            "name": self.name
-        }
-    
-    def get_summary(self) -> str:
-        """Get a concise order summary."""
-        if not self.is_complete():
-            return "Order in progress"
+CONTENT_FILE = "dataset.json" 
 
-        extras_text = f" with {', '.join(self.extras)}" if self.extras else ""
-        return f"{self.size.title()} {self.drinkType.title()}{extras_text} for {self.name}"
+# NEW QUESTIONS
+DEFAULT_CONTENT = [
+  {
+    "id": "osi_model",
+    "title": "OSI Model",
+    "summary": "The OSI (Open Systems Interconnection) model is a conceptual framework that divides network communication into seven layers, from physical transmission to application-level interactions. It helps standardize communication between different devices and systems.",
+    "sample_question": "What are the seven layers of the OSI model?"
+  },
+  {
+    "id": "ip_address",
+    "title": "IP Address",
+    "summary": "An IP address is a unique numerical label assigned to each device connected to a network that uses the Internet Protocol. It identifies the host and provides its location in the network. There are two versions: IPv4 and IPv6.",
+    "sample_question": "What is the difference between IPv4 and IPv6?"
+  },
+  {
+    "id": "router",
+    "title": "Router",
+    "summary": "A router is a networking device that forwards data packets between computer networks. It determines the best path to send the data across interconnected networks based on routing tables and algorithms.",
+    "sample_question": "How does a router decide which path to send data through?"
+  },
+  {
+    "id": "dns",
+    "title": "DNS",
+    "summary": "The Domain Name System (DNS) is a hierarchical naming system that translates human-friendly domain names into IP addresses, making it easier for users to access websites without remembering numerical addresses.",
+    "sample_question": "Why do we need DNS instead of directly using IP addresses?"
+  },
+  {
+    "id": "tcp_ip",
+    "title": "TCP/IP Model",
+    "summary": "The TCP/IP model is a suite of communication protocols used for the Internet and similar networks. It has four layers: Link, Internet, Transport, and Application. It outlines how data should be packaged, transmitted, and received.",
+    "sample_question": "What are the four layers of the TCP/IP model?"
+  }
+]
+
+
+def load_content():
+    # opens dataset.json, if not found creates it with DEFAULT_CONTENT
+    try:
+        path = os.path.join(os.path.dirname(__file__), CONTENT_FILE)
+        
+        if not os.path.exists(path):
+            print(f" {CONTENT_FILE} not found. Generating data...")
+            with open(path, "w", encoding='utf-8') as f:
+                json.dump(DEFAULT_CONTENT, f, indent=4)
+            print(" Computer Network content file created successfully.")
+            
+        # Read the file
+        with open(path, "r", encoding='utf-8') as f:
+            data = json.load(f)
+            return data
+            
+    except Exception as e:
+        print(f" Error managing content file: {e}")
+        return []
+
+# Load data immediately on startup
+COURSE_CONTENT = load_content()
+
+
+@dataclass
+class TutorState:
+    """Tracks the current learning context"""
+    current_topic_id: str | None = None
+    current_topic_data: dict | None = None
+    mode: Literal["learn", "quiz", "teach_back"] = "learn"
+    
+    def set_topic(self, topic_id: str):
+        # Find topic in loaded content
+        topic = next((item for item in COURSE_CONTENT if item["id"] == topic_id), None)
+        if topic:
+            self.current_topic_id = topic_id
+            self.current_topic_data = topic
+            return True
+        return False
 
 @dataclass
 class Userdata:
-    """👤 User session data"""
-    order: OrderState
-    session_start: datetime = field(default_factory=datetime.now)
+    tutor_state: TutorState
+    agent_session: Optional[AgentSession] = None 
+
+# ======================================================
+# 🛠️ TUTOR TOOLS
+# ======================================================
 
 @function_tool
-async def set_drink_type(
-    ctx: RunContext[Userdata],
-    drink: Annotated[
-        Literal["latte",  "matcha", "americano", "cappuccino", "mocha", "espresso", "coffee", "cold brew"],
-        Field(description="🎯 The type of coffee drink the customer wants"),
-    ],
+async def select_topic(
+    ctx: RunContext[Userdata], 
+    topic_id: Annotated[str, Field(description="The ID of the topic to study (e.g., 'dna', 'cell', 'nucleus')")]
 ) -> str:
-    """☕ Set the drink type. Call when customer specifies which coffee they want."""
-    ctx.userdata.order.drinkType = drink
-    print(f"✅ DRINK SET: {drink.upper()}")
-    print(f"📊 Order Progress: {ctx.userdata.order.get_summary()}")
-    return f"Excellent choice — one {drink} coming up!"
-
-@function_tool
-async def set_size(
-    ctx: RunContext[Userdata],
-    size: Annotated[
-        Literal["small", "medium", "large", "extra large"],
-        Field(description="📏 The size of the drink"),
-    ],
-) -> str:
-    """📏 Set the size. Call when customer specifies drink size."""
-    ctx.userdata.order.size = size
-    print(f"✅ SIZE SET: {size.upper()}")
-    print(f"📊 Order Progress: {ctx.userdata.order.get_summary()}")
-    return f"{size.title()} size noted."
-
-@function_tool
-async def set_milk(
-    ctx: RunContext[Userdata],
-    milk: Annotated[
-        Literal["whole", "skim", "almond", "oat", "soy", "coconut", "none"],
-        Field(description="🥛 The type of milk for the drink"),
-    ],
-) -> str:
-    """🥛 Set milk preference. Call when customer specifies milk type."""
-    ctx.userdata.order.milk = milk
-    print(f"✅ MILK SET: {milk.upper()}")
-    print(f"📊 Order Progress: {ctx.userdata.order.get_summary()}")
+    """📚 Selects a topic to study from the available list."""
+    state = ctx.userdata.tutor_state
+    success = state.set_topic(topic_id.lower())
     
-    if milk == "none":
-        return "Got it — black coffee."
-    return f"{milk.title()} milk noted."
+    if success:
+        return f"Topic set to {state.current_topic_data['title']}. Ask the user if they want to 'Learn', be 'Quizzed', or 'Teach it back'."
+    else:
+        available = ", ".join([t["id"] for t in COURSE_CONTENT])
+        return f"Topic not found. Available topics are: {available}"
 
 @function_tool
-async def set_extras(
-    ctx: RunContext[Userdata],
-    extras: Annotated[
-        list[Literal["sugar", "whipped cream", "caramel", "extra shot", "vanilla", "cinnamon", "honey"]] | None,
-        Field(description="🎯 List of extras, or empty/None for no extras"),
-    ] = None,
+async def set_learning_mode(
+    ctx: RunContext[Userdata], 
+    mode: Annotated[str, Field(description="The mode to switch to: 'learn', 'quiz', or 'teach_back'")]
 ) -> str:
-    """🎯 Set extras. Call when customer specifies add-ons or says no extras."""
-    ctx.userdata.order.extras = extras if extras else []
-    print(f"✅ EXTRAS SET: {ctx.userdata.order.extras}")
-    print(f"📊 Order Progress: {ctx.userdata.order.get_summary()}")
+    """🔄 Switches the interaction mode and updates the agent's voice/persona."""
     
-    if ctx.userdata.order.extras:
-        return f"Added {', '.join(ctx.userdata.order.extras)}."
-    return "No extras noted."
+    # 1. Update State
+    state = ctx.userdata.tutor_state
+    state.mode = mode.lower()
+    
+    # 2. Switch Voice based on Mode
+    agent_session = ctx.userdata.agent_session 
+    
+    if agent_session:
+        if state.mode == "learn":
+            # 👨‍🏫 MATTHEW: The Lecturer
+            agent_session.tts.update_options(voice="en-US-matthew", style="Promo")
+            instruction = f"Mode: LEARN. Explain: {state.current_topic_data['summary']}"
+            
+        elif state.mode == "quiz":
+            # 👩‍🏫 ALICIA: The Examiner
+            agent_session.tts.update_options(voice="en-US-alicia", style="Conversational")
+            instruction = f"Mode: QUIZ. Ask this question: {state.current_topic_data['sample_question']}"
+            
+        elif state.mode == "teach_back":
+            # 👨‍🎓 KEN: The Student/Coach
+            agent_session.tts.update_options(voice="en-US-ken", style="Promo")
+            instruction = "Mode: TEACH_BACK. Ask the user to explain the concept to you as if YOU are the beginner."
+        else:
+            return "Invalid mode."
+    else:
+        instruction = "Voice switch failed (Session not found)."
+
+    print(f"🔄 SWITCHING MODE -> {state.mode.upper()}")
+    return f"Switched to {state.mode} mode. {instruction}"
 
 @function_tool
-async def set_name(
+async def evaluate_teaching(
     ctx: RunContext[Userdata],
-    name: Annotated[str, Field(description="👤 Customer's name for the order")],
+    user_explanation: Annotated[str, Field(description="The explanation given by the user during teach-back")]
 ) -> str:
-    """👤 Set customer name. Call when customer provides their name."""
-    ctx.userdata.order.name = name.strip().title()
-    return f"Thanks, {ctx.userdata.order.name}."
+    """📝 call this when the user has finished explaining a concept in 'teach_back' mode."""
+    print(f"📝 EVALUATING EXPLANATION: {user_explanation}")
+    return "Analyze the user's explanation. Give them a score out of 10 on accuracy and clarity, and correct any mistakes."
 
-@function_tool
-async def complete_order(ctx: RunContext[Userdata]) -> str:
-    """🎉 Finalize and save order to JSON. ONLY call when ALL fields are filled."""
-    order = ctx.userdata.order
-    
-    if not order.is_complete():
-        missing = []
-        if not order.drinkType: missing.append("drink type")
-        if not order.size: missing.append("size")
-        if not order.milk: missing.append("milk")
-        if order.extras is None: missing.append("extras")
-        if not order.name: missing.append("name")
-        return f"Almost there — please provide: {', '.join(missing)}."
+# ======================================================
+# 🧠 AGENT DEFINITION
+# ======================================================
 
-    try:
-        save_order_to_json(order)
-        extras_text = f" with {', '.join(order.extras)}" if order.extras else ""
-        return (
-            f"Order confirmed: {order.size} {order.drinkType}{extras_text} for {order.name}. "
-            "We'll prepare it now — estimated 3-5 minutes."
-        )
-    except Exception:
-        return "Order recorded but there was an error saving it. We'll prepare your drink regardless."
-
-@function_tool
-async def get_order_status(ctx: RunContext[Userdata]) -> str:
-    """📊 Get current order status. Call when customer asks about their order."""
-    order = ctx.userdata.order
-    if order.is_complete():
-        return f"Your order is complete: {order.get_summary()}"
-
-    progress = order.get_summary()
-    return f"Order in progress: {progress}"
-
-# Agent definition
-class BaristaAgent(Agent):
+class TutorAgent(Agent):
     def __init__(self):
+        # Generate list of topics for the prompt
+        topic_list = ", ".join([f"{t['title']}" for t in COURSE_CONTENT])
+        
         super().__init__(
-            instructions="""
-            You are a friendly and professional barista for the coffee shop.
-
-            Mission: take coffee orders by collecting these details:
-            - Drink Type: espresso, mocha, coffee, cold brew, matcha, latte, cappuccino, americano
-            - Size: small, medium, large, extra large
-            - Milk: whole, skim, almond, oat, soy, coconut, none
-            - Extras: sugar, whipped cream, caramel, extra shot, vanilla, cinnamon, honey, or none
-            - Customer Name
-
-            Process:
-            1. Greet and ask for drink type
-            2. Ask for size
-            3. Ask for milk
-            4. Ask about extras
-            5. Get customer name
-            6. Confirm and complete the order
-
-            Style: polite and soft and ask one question at a time.
+            instructions=f"""
+            You are a Computer Network Tutor designed to help users master concepts like OSI Model, IP Addressing, DNS, and Routing.
+            
+            📚 **AVAILABLE TOPICS:** {topic_list}
+            
+            🔄 **YOU HAVE 3 MODES:**
+            1. **LEARN Mode (Voice: Matthew):** You explain the concept clearly using the summary data.
+            2. **QUIZ Mode (Voice: Alicia):** You ask the user a specific question to test knowledge.
+            3. **TEACH_BACK Mode (Voice: Ken):** YOU pretend to be a student. Ask the user to explain the concept to you.
+            
+            ⚙️ **BEHAVIOR:**
+            - Start by asking what topic they want to study.
+            - Use the `set_learning_mode` tool immediately when the user asks to learn, take a quiz, or teach.
+            - In 'teach_back' mode, listen to their explanation and then use `evaluate_teaching` to give feedback.
             """,
-            tools=[
-                set_drink_type,
-                set_size,
-                set_milk,
-                set_extras,
-                set_name,
-                complete_order,
-                get_order_status,
-            ],
+            tools=[select_topic, set_learning_mode, evaluate_teaching],
         )
 
-def create_empty_order():
-    """🆕 Create a fresh order state"""
-    return OrderState()
 
-# take order and save to JSON
-def get_orders_folder():
-    """📁 Get the orders directory path"""
-    base_dir = os.path.dirname(__file__)   # src/
-    backend_dir = os.path.abspath(os.path.join(base_dir, ".."))
-    folder = os.path.join(backend_dir, "orders")
-    os.makedirs(folder, exist_ok=True)
-    return folder
-
-def save_order_to_json(order: OrderState) -> str:
-    """💾 Save order to JSON file with enhanced logging"""
-    print(f"\n🔄 ATTEMPTING TO SAVE ORDER...")
-    folder = get_orders_folder()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"order_{timestamp}.json"
-    path = os.path.join(folder, filename)
-
-    try:
-        order_data = order.to_dict()
-        order_data["timestamp"] = datetime.now().isoformat()
-        order_data["session_id"] = f"session_{timestamp}"
-        
-        with open(path, "w", encoding='utf-8') as f:
-            json.dump(order_data, f, indent=4, ensure_ascii=False)
-        
-        print("\n" + "✅" * 30)
-        print("🎉 ORDER SAVED SUCCESSFULLY!")
-        print(f"📁 Location: {path}")
-        print(f"👤 Customer: {order.name}")
-        print(f"☕ Order: {order.get_summary()}")
-        print("✅" * 30 + "\n")
-        
-        return path
-        
-    except Exception as e:
-        print(f"\n❌ CRITICAL ERROR SAVING ORDER: {e}")
-        print(f"📁 Attempted path: {path}")
-        print("🚨 Please check directory permissions!")
-        raise e
-
-# testing the system
-def test_order_saving():
-    """🧪 Test function to verify order saving works"""
-    print("\n🧪 RUNNING ORDER SAVING TEST...")
-    
-    test_order = OrderState()
-    test_order.drinkType = "matcha"
-    test_order.size = "medium"
-    test_order.milk = "oat"
-    test_order.extras = ["extra shot", "vanilla"]
-    test_order.name = "testcustomer"
-    
-    try:
-        path = save_order_to_json(test_order)
-        print(f"🎯 TEST RESULT: ✅ SUCCESS - Saved to {path}")
-        return True
-    except Exception as e:
-        print(f"🎯 TEST RESULT: ❌ FAILED - {e}")
-        return False
-
-
-# for prewarming models
 def prewarm(proc: JobProcess):
-    """🔥 Preload VAD model for better performance"""
-    print("🔥 Prewarming VAD model...")
     proc.userdata["vad"] = silero.VAD.load()
-    print("✅ VAD model loaded successfully!")
 
-
-# Agent entrypoint
 async def entrypoint(ctx: JobContext):
-    """🎬 Main agent entrypoint - handles customer sessions"""
     ctx.log_context_fields = {"room": ctx.room.name}
-
-    # Run test to verify everything works
-    test_order_saving()
-
-    # Create user session data with empty order
-    userdata = Userdata(order=create_empty_order())
     
-    session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    print(f"\n🆕 NEW CUSTOMER SESSION: {session_id}")
-    print(f"📝 Initial order state: {userdata.order.get_summary()}\n")
+    # 1. Initialize State
+    userdata = Userdata(tutor_state=TutorState())
 
-    # Create session with userdata
+    # 2. Setup Agent
     session = AgentSession(
         stt=deepgram.STT(model="nova-3"),
         llm=google.LLM(model="gemini-2.5-flash"),
         tts=murf.TTS(
-            voice="en-US-matthew",
-            style="Conversation",
+            voice="en-US-matthew", 
+            style="Promo",        
             text_pacing=True,
         ),
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
-        userdata=userdata,  # Pass userdata to session
+        userdata=userdata,
     )
-
-    # Metrics collection
-    usage_collector = metrics.UsageCollector()
-    @session.on("metrics_collected")
-    def _on_metrics(ev: MetricsCollectedEvent):
-        usage_collector.collect(ev.metrics)
-
+    
+    # 3. Store session in userdata for tools to access
+    userdata.agent_session = session
+    
+    # 4. Start
     await session.start(
-        agent=BaristaAgent(),
+        agent=TutorAgent(),
         room=ctx.room,
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVC()
@@ -328,10 +236,5 @@ async def entrypoint(ctx: JobContext):
 
     await ctx.connect()
 
-### start the application
 if __name__ == "__main__":
-    print("\n" + "=" * 25)
-    print("STARTING COFFEE SHOP AGENT...")
-    print("=" * 25 + "\n")
-    
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
