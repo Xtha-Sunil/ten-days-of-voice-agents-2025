@@ -1,0 +1,58 @@
+[
+  {
+    "question": "What is WorldLink?",
+    "answer": "WorldLink Communications is Nepal’s largest internet service provider offering high-speed fiber internet for homes and businesses."
+  },
+  {
+    "question": "What services do you offer?",
+    "answer": "WorldLink offers fiber internet, dual-band WiFi routers, mesh WiFi systems, NETTV IPTV, enterprise solutions, and public WiFi hotspots across Nepal."
+  },
+  {
+    "question": "Who is WorldLink for?",
+    "answer": "WorldLink is ideal for home users, gamers, remote workers, small businesses, and enterprises needing reliable high-speed internet."
+  },
+  {
+    "question": "What speeds do you provide?",
+    "answer": "Common home plans include 200 Mbps, 250 Mbps, and 300 Mbps. Higher speeds are available for enterprise users."
+  },
+  {
+    "question": "Do you have pricing details?",
+    "answer": "Yes. 200 Mbps costs Rs 12,600 yearly, 250 Mbps costs Rs 13,800 yearly, and 300 Mbps costs Rs 15,600 yearly. Monthly plans are also available, such as 300 Mbps for Rs 1,550 per month."
+  },
+  {
+    "question": "Do you offer a free trial?",
+    "answer": "WorldLink does not offer a free trial, but you can subscribe monthly before committing to long-term plans."
+  },
+  {
+    "question": "Do you provide WiFi routers?",
+    "answer": "Yes. An ONU router is included, and users can add mesh WiFi or secondary routers for better coverage."
+  },
+  {
+    "question": "What is SafeNet?",
+    "answer": "SafeNet is WorldLink’s parental-control and safe-browsing feature that blocks harmful or adult content."
+  },
+  {
+    "question": "What is myWorldLink WiFi?",
+    "answer": "It is a network of public WiFi hotspots where WorldLink customers can log in with their account and access internet for free."
+  },
+  {
+    "question": "How can I pay my internet bill?",
+    "answer": "You can pay through the myWorldLink app, online payment partners (like eSewa, Khalti), or at any WorldLink branch."
+  },
+  {
+    "question": "My internet is slow. What should I do?",
+    "answer": "Restart your router, check cable connections, and verify if too many devices are connected. If the issue continues, contact support."
+  },
+  {
+    "question": "How do I contact support?",
+    "answer": "You can call 01-5970050 (NTC) or 9801523050 / 9801523051 (Ncell), or email support@worldlink.com.np."
+  },
+  {
+    "question": "Can I shift my connection to another location?",
+    "answer": "Yes. You can request a shift through the myWorldLink app or by calling customer support."
+  },
+  {
+    "question": "Do you provide compensation for downtime?",
+    "answer": "Yes. If an individual issue is not resolved within 24 hours, customers can claim time compensation."
+  }
+]

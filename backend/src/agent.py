@@ -1,10 +1,10 @@
 import logging
 import json
 import os
+import asyncio
 from datetime import datetime
-from typing import Annotated, Literal
-from dataclasses import dataclass, field
-
+from typing import Annotated, Optional
+from dataclasses import dataclass, asdict
 from dotenv import load_dotenv
 from pydantic import Field
 from livekit.agents import (
@@ -15,10 +15,8 @@ from livekit.agents import (
     RoomInputOptions,
     WorkerOptions,
     cli,
-    metrics,
-    MetricsCollectedEvent,
-    RunContext,
     function_tool,
+    RunContext,
 )
 
 from livekit.plugins import murf, silero, google, deepgram, noise_cancellation
@@ -27,299 +25,198 @@ from livekit.plugins.turn_detector.multilingual import MultilingualModel
 logger = logging.getLogger("agent")
 load_dotenv(".env.local")
 
-@dataclass
-class OrderState:
-    """☕ Coffee shop order state with validation"""
-    drinkType: str | None = None
-    size: str | None = None
-    milk: str | None = None
-    extras: list[str] = field(default_factory=list)
-    name: str | None = None
-    
-    def is_complete(self) -> bool:
-        """✅ Check if all required fields are filled"""
-        return all([
-            self.drinkType is not None,
-            self.size is not None,
-            self.milk is not None,
-            self.extras is not None,
-            self.name is not None
-        ])
-    
-    def to_dict(self) -> dict:
-        """📦 Convert to dictionary for JSON serialization"""
-        return {
-            "drinkType": self.drinkType,
-            "size": self.size,
-            "milk": self.milk,
-            "extras": self.extras,
-            "name": self.name
-        }
-    
-    def get_summary(self) -> str:
-        """Get a concise order summary."""
-        if not self.is_complete():
-            return "Order in progress"
+# ======================================================
+# 📂 1. FAQ
+# ======================================================
 
-        extras_text = f" with {', '.join(self.extras)}" if self.extras else ""
-        return f"{self.size.title()} {self.drinkType.title()}{extras_text} for {self.name}"
+FAQ_FILE = "worldlink_faq.json"
+LEADS_FILE = "leads_db.json"
+
+DEFAULT_FAQ = [
+    {
+        "question": "What is WorldLink?",
+        "answer": "WorldLink Communications is Nepal’s largest internet service provider offering high-speed fiber internet for homes and businesses."
+    },
+    {
+        "question": "What services do you offer?",
+        "answer": "WorldLink offers fiber internet, dual-band WiFi routers, mesh WiFi systems, NETTV IPTV, enterprise solutions, and public WiFi hotspots across Nepal."
+    },
+    {
+        "question": "Who is WorldLink for?",
+        "answer": "WorldLink is ideal for home users, gamers, remote workers, small businesses, and enterprises needing reliable high-speed internet."
+    },
+    {
+        "question": "Do you have pricing details?",
+        "answer": "200 Mbps costs Rs 12,600 yearly, 250 Mbps Rs 13,800 yearly, 300 Mbps Rs 15,600 yearly. Monthly plans are also available."
+    },
+    {
+        "question": "Do you offer a free trial?",
+        "answer": "WorldLink does not offer a free trial, but monthly plans let you try without a long-term commitment."
+    },
+    {
+        "question": "How can I pay my internet bill?",
+        "answer": "Pay via the myWorldLink app, online payment partners like eSewa or Khalti, or at any WorldLink branch."
+    },
+    {
+        "question": "How do I contact support?",
+        "answer": "Call 01-5970050 (NTC) or 9801523050 / 9801523051 (Ncell), or email support@worldlink.com.np."
+    }
+]
+
+def load_knowledge_base():
+    try:
+        path = os.path.join(os.path.dirname(__file__), FAQ_FILE)
+        if not os.path.exists(path):
+            with open(path, "w", encoding='utf-8') as f:
+                json.dump(DEFAULT_FAQ, f, indent=4)
+        with open(path, "r", encoding='utf-8') as f:
+            return json.dumps(json.load(f))  # Return as string for the Prompt
+    except Exception as e:
+        print(f"⚠️ Error loading FAQ: {e}")
+        return ""
+
+worldlink_faq = load_knowledge_base()
+
+# ======================================================
+# 💾 2. LEAD DATA STRUCTURE
+# ======================================================
+
+@dataclass
+class LeadProfile:
+    name: str | None = None
+    company: str | None = None
+    email: str | None = None
+    role: str | None = None
+    use_case: str | None = None
+    team_size: str | None = None
+    timeline: str | None = None
+
+    def is_qualified(self):
+        """Returns True if we have minimum info (Name + Email + Use Case)"""
+        return all([self.name, self.email, self.use_case])
 
 @dataclass
 class Userdata:
-    """👤 User session data"""
-    order: OrderState
-    session_start: datetime = field(default_factory=datetime.now)
+    lead_profile: LeadProfile
+
+# ======================================================
+# 🛠️ 3. SDR TOOLS
+# ======================================================
 
 @function_tool
-async def set_drink_type(
+async def update_lead_profile(
     ctx: RunContext[Userdata],
-    drink: Annotated[
-        Literal["latte",  "matcha", "americano", "cappuccino", "mocha", "espresso", "coffee", "cold brew"],
-        Field(description="🎯 The type of coffee drink the customer wants"),
-    ],
+    name: Annotated[Optional[str], Field(description="Customer's name")] = None,
+    company: Annotated[Optional[str], Field(description="Customer's company name")] = None,
+    email: Annotated[Optional[str], Field(description="Customer's email address")] = None,
+    role: Annotated[Optional[str], Field(description="Customer's job title")] = None,
+    use_case: Annotated[Optional[str], Field(description="What they want to use the internet for")] = None,
+    team_size: Annotated[Optional[str], Field(description="Number of people in their team")] = None,
+    timeline: Annotated[Optional[str], Field(description="When they want to start (e.g., Now, next month)")] = None,
 ) -> str:
-    """☕ Set the drink type. Call when customer specifies which coffee they want."""
-    ctx.userdata.order.drinkType = drink
-    print(f"✅ DRINK SET: {drink.upper()}")
-    print(f"📊 Order Progress: {ctx.userdata.order.get_summary()}")
-    return f"Excellent choice — one {drink} coming up!"
+    profile = ctx.userdata.lead_profile
+
+    if name: profile.name = name
+    if company: profile.company = company
+    if email: profile.email = email
+    if role: profile.role = role
+    if use_case: profile.use_case = use_case
+    if team_size: profile.team_size = team_size
+    if timeline: profile.timeline = timeline
+
+    print(f"📝 UPDATING LEAD: {profile}")
+    return "Lead profile updated. Continue the conversation."
 
 @function_tool
-async def set_size(
+async def submit_lead_and_end(
     ctx: RunContext[Userdata],
-    size: Annotated[
-        Literal["small", "medium", "large", "extra large"],
-        Field(description="📏 The size of the drink"),
-    ],
 ) -> str:
-    """📏 Set the size. Call when customer specifies drink size."""
-    ctx.userdata.order.size = size
-    print(f"✅ SIZE SET: {size.upper()}")
-    print(f"📊 Order Progress: {ctx.userdata.order.get_summary()}")
-    return f"{size.title()} size noted."
+    profile = ctx.userdata.lead_profile
 
-@function_tool
-async def set_milk(
-    ctx: RunContext[Userdata],
-    milk: Annotated[
-        Literal["whole", "skim", "almond", "oat", "soy", "coconut", "none"],
-        Field(description="🥛 The type of milk for the drink"),
-    ],
-) -> str:
-    """🥛 Set milk preference. Call when customer specifies milk type."""
-    ctx.userdata.order.milk = milk
-    print(f"✅ MILK SET: {milk.upper()}")
-    print(f"📊 Order Progress: {ctx.userdata.order.get_summary()}")
-    
-    if milk == "none":
-        return "Got it — black coffee."
-    return f"{milk.title()} milk noted."
+    db_path = os.path.join(os.path.dirname(__file__), LEADS_FILE)
+    entry = asdict(profile)
+    entry["timestamp"] = datetime.now().isoformat()
 
-@function_tool
-async def set_extras(
-    ctx: RunContext[Userdata],
-    extras: Annotated[
-        list[Literal["sugar", "whipped cream", "caramel", "extra shot", "vanilla", "cinnamon", "honey"]] | None,
-        Field(description="🎯 List of extras, or empty/None for no extras"),
-    ] = None,
-) -> str:
-    """🎯 Set extras. Call when customer specifies add-ons or says no extras."""
-    ctx.userdata.order.extras = extras if extras else []
-    print(f"✅ EXTRAS SET: {ctx.userdata.order.extras}")
-    print(f"📊 Order Progress: {ctx.userdata.order.get_summary()}")
-    
-    if ctx.userdata.order.extras:
-        return f"Added {', '.join(ctx.userdata.order.extras)}."
-    return "No extras noted."
+    existing_data = []
+    if os.path.exists(db_path):
+        try:
+            with open(db_path, "r") as f:
+                existing_data = json.load(f)
+        except: pass
 
-@function_tool
-async def set_name(
-    ctx: RunContext[Userdata],
-    name: Annotated[str, Field(description="👤 Customer's name for the order")],
-) -> str:
-    """👤 Set customer name. Call when customer provides their name."""
-    ctx.userdata.order.name = name.strip().title()
-    return f"Thanks, {ctx.userdata.order.name}."
+    existing_data.append(entry)
 
-@function_tool
-async def complete_order(ctx: RunContext[Userdata]) -> str:
-    """🎉 Finalize and save order to JSON. ONLY call when ALL fields are filled."""
-    order = ctx.userdata.order
-    
-    if not order.is_complete():
-        missing = []
-        if not order.drinkType: missing.append("drink type")
-        if not order.size: missing.append("size")
-        if not order.milk: missing.append("milk")
-        if order.extras is None: missing.append("extras")
-        if not order.name: missing.append("name")
-        return f"Almost there — please provide: {', '.join(missing)}."
+    with open(db_path, "w") as f:
+        json.dump(existing_data, f, indent=4)
 
-    try:
-        save_order_to_json(order)
-        extras_text = f" with {', '.join(order.extras)}" if order.extras else ""
-        return (
-            f"Order confirmed: {order.size} {order.drinkType}{extras_text} for {order.name}. "
-            "We'll prepare it now — estimated 3-5 minutes."
-        )
-    except Exception:
-        return "Order recorded but there was an error saving it. We'll prepare your drink regardless."
+    print(f"✅ LEAD SAVED TO {LEADS_FILE}")
+    return f"Lead saved. Summarize the call for the user: 'Thanks {profile.name}, I have your info regarding {profile.use_case}. We will email you at {profile.email}. Goodbye!'"
 
-@function_tool
-async def get_order_status(ctx: RunContext[Userdata]) -> str:
-    """📊 Get current order status. Call when customer asks about their order."""
-    order = ctx.userdata.order
-    if order.is_complete():
-        return f"Your order is complete: {order.get_summary()}"
+# ======================================================
+# 🧠 4. AGENT DEFINITION
+# ======================================================
 
-    progress = order.get_summary()
-    return f"Order in progress: {progress}"
-
-# Agent definition
-class BaristaAgent(Agent):
+class SDRAgent(Agent):
     def __init__(self):
         super().__init__(
-            instructions="""
-            You are a friendly and professional barista for the coffee shop.
+            instructions=f"""
+            You are 'Sita', a friendly and professional Sales Development Rep (SDR) for 'WorldLink', Nepal’s largest ISP.
 
-            Mission: take coffee orders by collecting these details:
-            - Drink Type: espresso, mocha, coffee, cold brew, matcha, latte, cappuccino, americano
-            - Size: small, medium, large, extra large
-            - Milk: whole, skim, almond, oat, soy, coconut, none
-            - Extras: sugar, whipped cream, caramel, extra shot, vanilla, cinnamon, honey, or none
-            - Customer Name
+            📘 **YOUR KNOWLEDGE BASE (FAQ):**
+            {worldlink_faq}
 
-            Process:
-            1. Greet and ask for drink type
-            2. Ask for size
-            3. Ask for milk
-            4. Ask about extras
-            5. Get customer name
-            6. Confirm and complete the order
+            🎯 **YOUR GOAL:**
+            1. Answer questions about WorldLink services using the FAQ.
+            2. **QUALIFY THE LEAD:** Naturally ask for:
+               - Name
+               - Company / Role
+               - Email
+               - Use Case (why they want the internet)
+               - Team Size
+               - Timeline
 
-            Style: polite and soft and ask one question at a time.
-            """,
-            tools=[
-                set_drink_type,
-                set_size,
-                set_milk,
-                set_extras,
-                set_name,
-                complete_order,
-                get_order_status,
-            ],
+            ⚙️ **BEHAVIOR:**
+            - Answer user questions clearly and then ask one lead question naturally.
+            - Use `update_lead_profile` whenever you get new info.
+            - When the user is done, use `submit_lead_and_end`.
+
+            🚫 **RESTRICTIONS:**
+            - If unsure, say: 'I’ll check and get back to you via email.' Do not make up prices.
+            """
+            ,
+            tools=[update_lead_profile, submit_lead_and_end],
         )
 
-def create_empty_order():
-    """🆕 Create a fresh order state"""
-    return OrderState()
+# ======================================================
+# 🎬 ENTRYPOINT
+# ======================================================
 
-# take order and save to JSON
-def get_orders_folder():
-    """📁 Get the orders directory path"""
-    base_dir = os.path.dirname(__file__)   # src/
-    backend_dir = os.path.abspath(os.path.join(base_dir, ".."))
-    folder = os.path.join(backend_dir, "orders")
-    os.makedirs(folder, exist_ok=True)
-    return folder
-
-def save_order_to_json(order: OrderState) -> str:
-    """💾 Save order to JSON file with enhanced logging"""
-    print(f"\n🔄 ATTEMPTING TO SAVE ORDER...")
-    folder = get_orders_folder()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"order_{timestamp}.json"
-    path = os.path.join(folder, filename)
-
-    try:
-        order_data = order.to_dict()
-        order_data["timestamp"] = datetime.now().isoformat()
-        order_data["session_id"] = f"session_{timestamp}"
-        
-        with open(path, "w", encoding='utf-8') as f:
-            json.dump(order_data, f, indent=4, ensure_ascii=False)
-        
-        print("\n" + "✅" * 30)
-        print("🎉 ORDER SAVED SUCCESSFULLY!")
-        print(f"📁 Location: {path}")
-        print(f"👤 Customer: {order.name}")
-        print(f"☕ Order: {order.get_summary()}")
-        print("✅" * 30 + "\n")
-        
-        return path
-        
-    except Exception as e:
-        print(f"\n❌ CRITICAL ERROR SAVING ORDER: {e}")
-        print(f"📁 Attempted path: {path}")
-        print("🚨 Please check directory permissions!")
-        raise e
-
-# testing the system
-def test_order_saving():
-    """🧪 Test function to verify order saving works"""
-    print("\n🧪 RUNNING ORDER SAVING TEST...")
-    
-    test_order = OrderState()
-    test_order.drinkType = "matcha"
-    test_order.size = "medium"
-    test_order.milk = "oat"
-    test_order.extras = ["extra shot", "vanilla"]
-    test_order.name = "testcustomer"
-    
-    try:
-        path = save_order_to_json(test_order)
-        print(f"🎯 TEST RESULT: ✅ SUCCESS - Saved to {path}")
-        return True
-    except Exception as e:
-        print(f"🎯 TEST RESULT: ❌ FAILED - {e}")
-        return False
-
-
-# for prewarming models
 def prewarm(proc: JobProcess):
-    """🔥 Preload VAD model for better performance"""
-    print("🔥 Prewarming VAD model...")
     proc.userdata["vad"] = silero.VAD.load()
-    print("✅ VAD model loaded successfully!")
 
-
-# Agent entrypoint
 async def entrypoint(ctx: JobContext):
-    """🎬 Main agent entrypoint - handles customer sessions"""
     ctx.log_context_fields = {"room": ctx.room.name}
 
-    # Run test to verify everything works
-    test_order_saving()
+    print("\n" + "💼" * 25)
+    print("🚀 STARTING WORLDLINK SDR SESSION")
 
-    # Create user session data with empty order
-    userdata = Userdata(order=create_empty_order())
-    
-    session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    print(f"\n🆕 NEW CUSTOMER SESSION: {session_id}")
-    print(f"📝 Initial order state: {userdata.order.get_summary()}\n")
+    userdata = Userdata(lead_profile=LeadProfile())
 
-    # Create session with userdata
     session = AgentSession(
         stt=deepgram.STT(model="nova-3"),
         llm=google.LLM(model="gemini-2.5-flash"),
         tts=murf.TTS(
-            voice="en-US-matthew",
-            style="Conversation",
+            voice="en-US-natalie",
+            style="Promo",
             text_pacing=True,
         ),
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
-        userdata=userdata,  # Pass userdata to session
+        userdata=userdata,
     )
 
-    # Metrics collection
-    usage_collector = metrics.UsageCollector()
-    @session.on("metrics_collected")
-    def _on_metrics(ev: MetricsCollectedEvent):
-        usage_collector.collect(ev.metrics)
-
     await session.start(
-        agent=BaristaAgent(),
+        agent=SDRAgent(),
         room=ctx.room,
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVC()
@@ -328,10 +225,5 @@ async def entrypoint(ctx: JobContext):
 
     await ctx.connect()
 
-### start the application
 if __name__ == "__main__":
-    print("\n" + "=" * 25)
-    print("STARTING COFFEE SHOP AGENT...")
-    print("=" * 25 + "\n")
-    
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))

@@ -11,7 +11,8 @@ export default async function Layout({ children }: LayoutProps) {
 
   return (
     <>
-      <header className="fixed top-0 left-0 z-50 hidden w-full flex-row justify-between p-6 md:flex">
+      <header className="fixed top-0 left-0 z-50 hidden w-full flex-row items-center justify-between p-6 md:flex">
+        {/* Left: Logo */}
         <a
           target="_blank"
           rel="noopener noreferrer"
@@ -27,6 +28,13 @@ export default async function Layout({ children }: LayoutProps) {
             className="hidden size-6 dark:block"
           />
         </a>
+  
+        {/* Center: Tech Tutor */}
+        <h1 className="absolute left-1/2 -translate-x-1/2 text-xl font-bold text-blue-600">
+        Sales Development Representative Agent
+        </h1>
+  
+        {/* Right: Built With */}
         <span className="text-foreground font-mono text-xs font-bold tracking-wider uppercase">
           Built with{' '}
           <a
@@ -39,7 +47,7 @@ export default async function Layout({ children }: LayoutProps) {
           </a>
         </span>
       </header>
-
+  
       {children}
     </>
   );
