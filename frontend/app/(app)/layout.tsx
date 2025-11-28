@@ -27,6 +27,11 @@ export default async function Layout({ children }: LayoutProps) {
             className="hidden size-6 dark:block"
           />
         </a>
+
+        <h1 className="absolute left-1/2 -translate-x-1/2 text-xl font-bold text-blue-600">
+          Food & Grocery Ordering Voice Agent
+        </h1>
+
         <span className="text-foreground font-mono text-xs font-bold tracking-wider uppercase">
           Built with{' '}
           <a
