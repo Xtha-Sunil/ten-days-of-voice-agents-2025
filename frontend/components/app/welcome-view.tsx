@@ -34,11 +34,13 @@ export const WelcomeView = ({
         <WelcomeImage />
 
         <p className="text-foreground max-w-prose pt-1 leading-6 font-medium">
-          Chat live with your voice AI agent
+          Game Master is ready to guide you through an epic Dungeons & Dragons adventure set in the
+          mysterious Nebula. Gather your party, prepare your character, and embark on a journey filled
+          with intrigue, danger, and excitement. Let the adventure begin!
         </p>
 
         <Button variant="primary" size="lg" onClick={onStartCall} className="mt-6 w-64 font-mono">
-          {startButtonText}
+          Start the Game
         </Button>
       </section>
 

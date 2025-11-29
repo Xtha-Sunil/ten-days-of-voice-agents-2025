@@ -1,6 +1,5 @@
 import { headers } from 'next/headers';
 import { getAppConfig } from '@/lib/utils';
-
 interface LayoutProps {
   children: React.ReactNode;
 }
@@ -27,6 +26,12 @@ export default async function Layout({ children }: LayoutProps) {
             className="hidden size-6 dark:block"
           />
         </a>
+
+      {/* Center: Tech Tutor */}
+      <h1 className="absolute left-1/2 -translate-x-1/2 text-xl font-bold text-blue-600">
+        D&D : Echoes of the Nebula
+      </h1>
+
         <span className="text-foreground font-mono text-xs font-bold tracking-wider uppercase">
           Built with{' '}
           <a
